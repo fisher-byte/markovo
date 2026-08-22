@@ -1,0 +1,83 @@
+name: Publish Markovo to MCP Registry
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markovo-mcp-registry-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish verified MCP metadata
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: mcp-registry
+      url: https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.fisher-byte%2Fmarkovo
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install verified mcp-publisher 1.8.1
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output /tmp/mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc' \
+            /tmp/mcp-publisher.tar.gz > /tmp/mcp-publisher.sha256
+          sha256sum --check /tmp/mcp-publisher.sha256
+          tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
+          chmod 0755 /tmp/mcp-publisher
+
+      - name: Validate public server metadata
+        run: /tmp/mcp-publisher validate server.json
+
+      - name: Authenticate to MCP Registry with GitHub OIDC
+        run: /tmp/mcp-publisher login github-oidc
+
+      - name: Publish immutable MCP metadata
+        run: /tmp/mcp-publisher publish server.json
+
+      - name: Verify official Registry listing
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          url = (
+              "https://registry.modelcontextprotocol.io/v0.1/servers"
+              "?search=io.github.fisher-byte%2Fmarkovo"
+          )
+          expected_name = "io.github.fisher-byte/markovo"
+          expected_version = "0.1.0"
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=15) as response:
+                      payload = json.load(response)
+              except (OSError, urllib.error.URLError, json.JSONDecodeError):
+                  payload = {}
+              records = []
+              for item in payload.get("servers", []):
+                  records.append(item.get("server", item))
+              if any(
+                  record.get("name") == expected_name
+                  and record.get("version") == expected_version
+                  for record in records
+              ):
+                  print(f"Verified {expected_name} {expected_version}")
+                  break
+              if attempt < 11:
+                  time.sleep(5)
+          else:
+              raise SystemExit("MCP Registry listing was not visible before timeout")
+          PY
