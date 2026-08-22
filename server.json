@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.fisher-byte/markovo",
+  "title": "Markovo File to Markdown",
+  "description": "Convert supported files and explicitly authorized public HTTPS pages to Markdown with bounded Credits, job tracking, verified bundles, and billing guidance.",
+  "repository": {
+    "url": "https://github.com/fisher-byte/markovo",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "websiteUrl": "https://markovo.net/docs",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "markovo",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MARKOVO_API_KEY",
+          "description": "Create a key at https://markovo.net/app#developer. Store it in the MCP host secret store; do not paste it into prompts.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MARKOVO_BASE_URL",
+          "description": "Markovo product API base URL.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string",
+          "value": "https://markovo.net"
+        }
+      ]
+    }
+  ]
+}
