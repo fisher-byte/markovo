@@ -200,6 +200,39 @@ class PublicDistributionContractTests(unittest.TestCase):
             "https://markovo.net/app#billing",
         )
 
+    def test_quota_error_adds_billing_guidance_when_service_omits_it(self) -> None:
+        class LegacyQuotaClient:
+            def usage(self) -> dict[str, object]:
+                raise RemoteClientError(
+                    "Not enough credits.",
+                    status=402,
+                    payload={
+                        "error": {
+                            "code": "quota_exceeded",
+                            "message": "Not enough credits.",
+                        }
+                    },
+                )
+
+        with patch(
+            "pdf2md_core.customer_mcp.RemoteClient.from_env",
+            return_value=LegacyQuotaClient(),
+        ):
+            response = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {"name": "markovo_usage", "arguments": {}},
+                }
+            )
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertEqual(payload["error"]["action"], "open_checkout")
+        self.assertEqual(
+            payload["error"]["portal_url"],
+            "https://markovo.net/app#billing",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
