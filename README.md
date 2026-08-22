@@ -52,7 +52,8 @@ topped up before retrying.
       "command": "uvx",
       "args": ["--from", "markovo", "markovo-mcp"],
       "env": {
-        "MARKOVO_API_KEY": "${MARKOVO_API_KEY}"
+        "MARKOVO_API_KEY": "${MARKOVO_API_KEY}",
+        "MARKOVO_MCP_ROOT": "/path/to/safe/project"
       }
     }
   }
@@ -60,8 +61,22 @@ topped up before retrying.
 ```
 
 MCP clients should inject `MARKOVO_API_KEY` through their secret or
-environment-variable settings. The server exposes setup guidance through
-its tool descriptions and structured API errors.
+environment-variable settings. The key and service origin are never MCP
+tool arguments, so prompts cannot redirect the credential. The public
+client accepts only `https://markovo.net` and does not follow authenticated
+redirects.
+
+The MCP server can read and write only within the required
+`MARKOVO_MCP_ROOT`. Set it to the smallest dedicated project directory
+your MCP host needs. If it is missing, the server refuses all file tools;
+parent-directory and symlink escapes are rejected.
+
+```bash
+export MARKOVO_MCP_ROOT="/path/to/safe/project"
+```
+
+Structured errors point to the Developer portal when a key is missing and
+to Billing when Credits are insufficient.
 
 ## Links
 

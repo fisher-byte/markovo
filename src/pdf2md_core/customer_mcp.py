@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -67,8 +68,8 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any] | None:
 def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         if name == "markovo_convert":
-            input_path = _required_path(arguments, "input_path")
-            out_dir = _required_path(arguments, "out_dir")
+            input_path = _required_input_path(arguments, "input_path")
+            out_dir = _required_output_dir(arguments, "out_dir")
             options: dict[str, Any] = {
                 "max_credits": _required(arguments, "max_credits"),
                 "mode": str(arguments.get("mode", "fast")),
@@ -84,7 +85,7 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             if arguments.get("capability_id"):
                 options["capability_id"] = str(arguments["capability_id"])
             return _content(
-                _client(arguments).convert_file(input_path, out_dir, **options)
+                _client().convert_file(input_path, out_dir, **options)
             )
         if name == "markovo_convert_url":
             if arguments.get("accept_remote_fetch") is not True:
@@ -92,9 +93,9 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                     "URL conversion requires explicit remote-fetch consent."
                 )
             return _content(
-                _client(arguments).convert_url(
+                _client().convert_url(
                     str(_required(arguments, "url")),
-                    _required_path(arguments, "out_dir"),
+                    _required_output_dir(arguments, "out_dir"),
                     max_credits=_required(arguments, "max_credits"),
                     accept_remote_fetch=True,
                     poll_interval_seconds=float(
@@ -108,13 +109,13 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             )
         if name == "markovo_job_status":
             job_id = str(_required(arguments, "job_id"))
-            return _content(_client(arguments).get_job(job_id))
+            return _content(_client().get_job(job_id))
         if name == "markovo_job_assets":
             job_id = str(_required(arguments, "job_id"))
-            return _content(_client(arguments).list_job_assets(job_id))
+            return _content(_client().list_job_assets(job_id))
         if name == "markovo_asset_url":
             return _content(
-                _client(arguments).create_asset_grant(
+                _client().create_asset_grant(
                     str(_required(arguments, "job_id")),
                     str(_required(arguments, "asset_path")),
                     expires_in_seconds=int(arguments.get("expires_in_seconds", 300)),
@@ -122,46 +123,33 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             )
         if name == "markovo_asset_revoke":
             return _content(
-                _client(arguments).revoke_asset_grant(
+                _client().revoke_asset_grant(
                     str(_required(arguments, "job_id")),
                     str(_required(arguments, "grant_id")),
                 )
             )
         if name == "markovo_usage":
-            return _content(_client(arguments).usage())
+            return _content(_client().usage())
         if name == "markovo_capabilities":
-            client = RemoteClient.for_capability_discovery(
-                base_url=str(arguments["base_url"])
-                if arguments.get("base_url")
-                else None,
-                api_key=str(arguments["api_key"]) if arguments.get("api_key") else None,
-            )
+            client = RemoteClient.for_capability_discovery()
             return _content(client.capabilities())
         if name == "markovo_billing":
-            return _content(_client(arguments).billing())
+            return _content(_client().billing())
         if name == "markovo_bundle_verify":
-            return _content(verify_bundle_manifest(_required_path(arguments, "bundle")))
-        if name == "markovo_doctor":
             return _content(
-                remote_product_diagnostics(
-                    base_url=str(arguments["base_url"])
-                    if arguments.get("base_url")
-                    else None,
-                    api_key=str(arguments["api_key"])
-                    if arguments.get("api_key")
-                    else None,
-                )
+                verify_bundle_manifest(_required_input_path(arguments, "bundle"))
             )
+        if name == "markovo_doctor":
+            return _content(remote_product_diagnostics())
     except RemoteClientError as exc:
         return _content({"error": exc.to_dict()})
     raise ValueError(f"Unknown tool: {name}")
 
 
-def _client(arguments: dict[str, Any]) -> RemoteClient:
-    return RemoteClient.from_env(
-        base_url=str(arguments["base_url"]) if arguments.get("base_url") else None,
-        api_key=str(arguments["api_key"]) if arguments.get("api_key") else None,
-    )
+def _client() -> RemoteClient:
+    """Load credentials only from the host environment, never model-visible input."""
+
+    return RemoteClient.from_env()
 
 
 def _required(arguments: dict[str, Any], name: str) -> Any:
@@ -171,8 +159,52 @@ def _required(arguments: dict[str, Any], name: str) -> Any:
     return value
 
 
-def _required_path(arguments: dict[str, Any], name: str) -> Path:
-    return Path(str(_required(arguments, name)))
+def _mcp_root() -> Path:
+    configured = os.getenv("MARKOVO_MCP_ROOT")
+    if not configured:
+        raise ValueError(
+            "MARKOVO_MCP_ROOT is required and must name a dedicated existing directory."
+        )
+    root = Path(configured).expanduser()
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("MARKOVO_MCP_ROOT must name an existing directory.") from exc
+    if not resolved.is_dir():
+        raise ValueError("MARKOVO_MCP_ROOT must name an existing directory.")
+    return resolved
+
+
+def _sandboxed_path(arguments: dict[str, Any], name: str, *, must_exist: bool) -> Path:
+    root = _mcp_root()
+    candidate = Path(str(_required(arguments, name))).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve(strict=must_exist)
+    except OSError as exc:
+        raise ValueError(f"`{name}` does not exist or cannot be resolved.") from exc
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"`{name}` must stay within MARKOVO_MCP_ROOT ({root})."
+        ) from exc
+    return resolved
+
+
+def _required_input_path(arguments: dict[str, Any], name: str) -> Path:
+    resolved = _sandboxed_path(arguments, name, must_exist=True)
+    if not resolved.is_file() and not (name == "bundle" and resolved.is_dir()):
+        raise ValueError(f"`{name}` must name an existing file.")
+    return resolved
+
+
+def _required_output_dir(arguments: dict[str, Any], name: str) -> Path:
+    resolved = _sandboxed_path(arguments, name, must_exist=False)
+    if resolved.exists() and not resolved.is_dir():
+        raise ValueError(f"`{name}` must name a directory.")
+    return resolved
 
 
 def _content(payload: Any) -> dict[str, Any]:
@@ -196,7 +228,6 @@ def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
 
 
 def _tools() -> list[dict[str, Any]]:
-    shared_auth = {"base_url": {"type": "string"}, "api_key": {"type": "string"}}
     return [
         {
             "name": "markovo_convert",
@@ -234,7 +265,6 @@ def _tools() -> list[dict[str, Any]]:
                         "enum": ["zip", "md"],
                         "default": "zip",
                     },
-                    **shared_auth,
                 },
                 "required": ["input_path", "out_dir", "max_credits"],
             },
@@ -266,7 +296,6 @@ def _tools() -> list[dict[str, Any]]:
                         "enum": ["zip", "md"],
                         "default": "zip",
                     },
-                    **shared_auth,
                 },
                 "required": ["url", "out_dir", "max_credits", "accept_remote_fetch"],
             },
@@ -281,12 +310,12 @@ def _tools() -> list[dict[str, Any]]:
                 (
                     "markovo_job_status",
                     "Fetch a remote job.",
-                    {"job_id": {"type": "string"}, **shared_auth},
+                    {"job_id": {"type": "string"}},
                 ),
                 (
                     "markovo_job_assets",
                     "List manifest-verified image assets for a completed job.",
-                    {"job_id": {"type": "string"}, **shared_auth},
+                    {"job_id": {"type": "string"}},
                 ),
                 (
                     "markovo_asset_url",
@@ -300,7 +329,6 @@ def _tools() -> list[dict[str, Any]]:
                             "maximum": 600,
                             "default": 300,
                         },
-                        **shared_auth,
                     },
                 ),
                 (
@@ -309,16 +337,15 @@ def _tools() -> list[dict[str, Any]]:
                     {
                         "job_id": {"type": "string"},
                         "grant_id": {"type": "string"},
-                        **shared_auth,
                     },
                 ),
-                ("markovo_usage", "Fetch account Credit usage.", shared_auth),
+                ("markovo_usage", "Fetch account Credit usage.", {}),
                 (
                     "markovo_capabilities",
                     "Fetch the live capability registry.",
-                    shared_auth,
+                    {},
                 ),
-                ("markovo_billing", "Return the secure billing URL.", shared_auth),
+                ("markovo_billing", "Return the secure billing URL.", {}),
                 (
                     "markovo_bundle_verify",
                     "Verify a downloaded Markovo bundle.",
@@ -327,7 +354,7 @@ def _tools() -> list[dict[str, Any]]:
                 (
                     "markovo_doctor",
                     "Check client, service, and API-key readiness.",
-                    shared_auth,
+                    {},
                 ),
             )
         ],

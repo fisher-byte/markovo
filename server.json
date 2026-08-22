@@ -33,12 +33,11 @@
           "format": "string"
         },
         {
-          "name": "MARKOVO_BASE_URL",
-          "description": "Markovo product API base URL.",
-          "isRequired": false,
+          "name": "MARKOVO_MCP_ROOT",
+          "description": "Dedicated existing directory that bounds all MCP file reads and writes. File tools fail closed when it is missing.",
+          "isRequired": true,
           "isSecret": false,
-          "format": "string",
-          "value": "https://markovo.net"
+          "format": "string"
         }
       ]
     }

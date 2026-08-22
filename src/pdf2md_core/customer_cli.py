@@ -31,8 +31,6 @@ def main(argv: list[str] | None = None) -> int:
             "as LaTeX and must be reviewed against the original."
         ),
     )
-    convert.add_argument("--base-url")
-    convert.add_argument("--api-key")
     convert.add_argument("--max-credits", required=True)
     convert.add_argument("--poll-interval-seconds", type=float, default=1.8)
     convert.add_argument("--poll-attempts", type=int, default=DEFAULT_POLL_ATTEMPTS)
@@ -45,8 +43,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     url_convert.add_argument("url")
     url_convert.add_argument("--out", type=Path, required=True)
-    url_convert.add_argument("--base-url")
-    url_convert.add_argument("--api-key")
     url_convert.add_argument("--max-credits", required=True)
     url_convert.add_argument("--poll-interval-seconds", type=float, default=1.8)
     url_convert.add_argument("--poll-attempts", type=int, default=DEFAULT_POLL_ATTEMPTS)
@@ -64,15 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         ("billing", "Return the secure browser billing URL."),
     ):
         command = commands.add_parser(name, help=help_text)
-        command.add_argument("--base-url")
-        command.add_argument("--api-key")
 
     assets = commands.add_parser(
         "assets", help="List manifest-verified image assets for a completed job."
     )
     assets.add_argument("job_id")
-    assets.add_argument("--base-url")
-    assets.add_argument("--api-key")
 
     asset_url = commands.add_parser(
         "asset-url", help="Create a revocable short-lived URL for one Bundle image."
@@ -80,21 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     asset_url.add_argument("job_id")
     asset_url.add_argument("asset_path")
     asset_url.add_argument("--expires-in-seconds", type=int, default=300)
-    asset_url.add_argument("--base-url")
-    asset_url.add_argument("--api-key")
 
     asset_revoke = commands.add_parser(
         "asset-revoke", help="Revoke a previously issued temporary asset URL."
     )
     asset_revoke.add_argument("job_id")
     asset_revoke.add_argument("grant_id")
-    asset_revoke.add_argument("--base-url")
-    asset_revoke.add_argument("--api-key")
 
     doctor = commands.add_parser("doctor", help="Check client, service, and API-key readiness.")
     doctor.add_argument("--json", action="store_true")
-    doctor.add_argument("--base-url")
-    doctor.add_argument("--api-key")
 
     verify = commands.add_parser("bundle-verify", help="Verify a downloaded Markovo bundle.")
     verify.add_argument("bundle", type=Path)
@@ -113,13 +99,9 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.capability_id:
                 options["capability_id"] = args.capability_id
-            payload = RemoteClient.from_env(
-                base_url=args.base_url, api_key=args.api_key
-            ).convert_file(args.input, args.out, **options)
+            payload = RemoteClient.from_env().convert_file(args.input, args.out, **options)
         elif args.command == "url-convert":
-            payload = RemoteClient.from_env(
-                base_url=args.base_url, api_key=args.api_key
-            ).convert_url(
+            payload = RemoteClient.from_env().convert_url(
                 args.url,
                 args.out,
                 max_credits=args.max_credits,
@@ -130,33 +112,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command in {"account", "usage", "capabilities", "billing"}:
             client = (
-                RemoteClient.for_capability_discovery(
-                    base_url=args.base_url, api_key=args.api_key
-                )
+                RemoteClient.for_capability_discovery()
                 if args.command == "capabilities"
-                else RemoteClient.from_env(base_url=args.base_url, api_key=args.api_key)
+                else RemoteClient.from_env()
             )
             payload = getattr(client, args.command)()
         elif args.command == "assets":
-            payload = RemoteClient.from_env(
-                base_url=args.base_url, api_key=args.api_key
-            ).list_job_assets(args.job_id)
+            payload = RemoteClient.from_env().list_job_assets(args.job_id)
         elif args.command == "asset-url":
-            payload = RemoteClient.from_env(
-                base_url=args.base_url, api_key=args.api_key
-            ).create_asset_grant(
+            payload = RemoteClient.from_env().create_asset_grant(
                 args.job_id,
                 args.asset_path,
                 expires_in_seconds=args.expires_in_seconds,
             )
         elif args.command == "asset-revoke":
-            payload = RemoteClient.from_env(
-                base_url=args.base_url, api_key=args.api_key
-            ).revoke_asset_grant(args.job_id, args.grant_id)
+            payload = RemoteClient.from_env().revoke_asset_grant(args.job_id, args.grant_id)
         elif args.command == "doctor":
-            payload = remote_product_diagnostics(
-                base_url=args.base_url, api_key=args.api_key
-            )
+            payload = remote_product_diagnostics()
         elif args.command == "bundle-verify":
             payload = verify_bundle_manifest(args.bundle)
         elif args.command == "mcp":

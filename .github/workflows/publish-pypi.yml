@@ -6,9 +6,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: markovo-pypi-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build and verify public package
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact source
@@ -21,9 +26,12 @@ jobs:
 
       - name: Build wheel
         run: |
-          python -m pip install --disable-pip-version-check build==1.3.0
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            --index-url https://pypi.org/simple \
+            --require-hashes -r .github/build-requirements.txt
+          python -m compileall -q src tests
           PYTHONPATH=src python -m unittest discover -s tests -v
-          python -m build --wheel
+          python -m build --wheel --no-isolation
 
       - name: Verify clean installation and MCP tools
         run: |
@@ -42,6 +50,7 @@ jobs:
 
   publish:
     name: Publish immutable version
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -58,3 +67,5 @@ jobs:
 
       - name: Publish to PyPI with OIDC
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          attestations: true

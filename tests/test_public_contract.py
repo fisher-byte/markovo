@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pdf2md_core import customer_mcp, remote_client
 from pdf2md_core.customer_mcp import handle_request
-from pdf2md_core.remote_client import RemoteClientError
+from pdf2md_core.remote_client import RemoteClient, RemoteClientError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,65 @@ class PublicDistributionContractTests(unittest.TestCase):
         self.assertIn("markovo_convert", names)
         self.assertIn("markovo_billing", names)
         self.assertIn("markovo_doctor", names)
+        projection = json.dumps(tools, ensure_ascii=False)
+        self.assertNotIn("api_key", projection)
+        self.assertNotIn("base_url", projection)
+
+    def test_mcp_paths_are_bounded_to_configured_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "allowed"
+            root.mkdir()
+            inside = root / "input.pdf"
+            inside.write_bytes(b"%PDF")
+            outside = workspace / "outside.pdf"
+            outside.write_bytes(b"%PDF")
+            with patch.dict(os.environ, {"MARKOVO_MCP_ROOT": str(root)}):
+                self.assertEqual(
+                    customer_mcp._required_input_path(
+                        {"input_path": "input.pdf"}, "input_path"
+                    ),
+                    inside.resolve(),
+                )
+                with self.assertRaisesRegex(ValueError, "MARKOVO_MCP_ROOT"):
+                    customer_mcp._required_input_path(
+                        {"input_path": str(outside)}, "input_path"
+                    )
+
+    def test_public_client_rejects_untrusted_origin_before_using_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MARKOVO_BASE_URL": "https://attacker.invalid",
+                "MARKOVO_API_KEY": "mk_secret_must_not_leave",
+            },
+            clear=False,
+        ):
+            with patch.object(
+                remote_client,
+                "_open_url",
+                side_effect=AssertionError("network must not be reached"),
+            ):
+                with self.assertRaises(RemoteClientError) as raised:
+                    RemoteClient.from_env()
+        self.assertEqual(raised.exception.to_dict()["code"], "unsafe_api_origin")
+
+        with patch.object(
+            remote_client,
+            "_open_url",
+            side_effect=AssertionError("network must not be reached"),
+        ):
+            with self.assertRaises(RemoteClientError) as direct:
+                RemoteClient(
+                    "https://attacker.invalid", "mk_secret_must_not_leave"
+                ).usage()
+        self.assertEqual(direct.exception.to_dict()["code"], "unsafe_api_origin")
+
+    def test_authenticated_requests_do_not_follow_redirects(self) -> None:
+        handler = remote_client._NoRedirectHandler()
+        self.assertIsNone(
+            handler.redirect_request(None, None, 302, "Found", {}, "https://attacker.invalid")
+        )
 
     def test_missing_key_returns_developer_portal_guidance(self) -> None:
         with patch.dict(
@@ -79,6 +140,30 @@ class PublicDistributionContractTests(unittest.TestCase):
         self.assertTrue(api_key["isRequired"])
         self.assertTrue(api_key["isSecret"])
         self.assertIn("/app#developer", api_key["description"])
+        names = {item["name"] for item in variables}
+        self.assertNotIn("MARKOVO_BASE_URL", names)
+        self.assertIn("MARKOVO_MCP_ROOT", names)
+        mcp_root = next(item for item in variables if item["name"] == "MARKOVO_MCP_ROOT")
+        self.assertTrue(mcp_root["isRequired"])
+
+    def test_missing_mcp_root_fails_closed(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "MARKOVO_MCP_ROOT is required"):
+                customer_mcp._mcp_root()
+
+    def test_release_workflow_is_main_only_and_hash_locked(self) -> None:
+        workflow = (ROOT / ".github/workflows/publish-pypi.yml").read_text(
+            encoding="utf-8"
+        )
+        requirements = (ROOT / ".github/build-requirements.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertGreaterEqual(workflow.count("github.ref == 'refs/heads/main'"), 2)
+        self.assertIn("--require-hashes", workflow)
+        self.assertIn("--index-url https://pypi.org/simple", workflow)
+        self.assertIn("--no-isolation", workflow)
+        self.assertIn("attestations: true", workflow)
+        self.assertEqual(requirements.count("--hash=sha256:"), 5)
 
     def test_quota_error_preserves_billing_portal(self) -> None:
         class EmptyBalanceClient:

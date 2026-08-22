@@ -17,6 +17,9 @@ from .bundle_manifest import verify_bundle_manifest
 from .credit_v2 import format_credits, parse_credit_units
 
 DEFAULT_BASE_URL = "https://markovo.net"
+# The public export flips this to True. Internal release canaries keep explicit
+# endpoint selection, while the PyPI package is pinned to the production origin.
+PUBLIC_DISTRIBUTION = True
 DEFAULT_POLL_ATTEMPTS = 400
 IDEMPOTENT_READ_ATTEMPTS = 3
 IDEMPOTENT_READ_BACKOFF_SECONDS = 0.5
@@ -99,6 +102,70 @@ class RemoteClientError(RuntimeError):
         return {"status": self.status, "code": "remote_error", "message": str(self)}
 
 
+def _normalize_base_url(value: str) -> str:
+    resolved = value.rstrip("/")
+    if PUBLIC_DISTRIBUTION:
+        parsed = urllib.parse.urlsplit(resolved)
+        if (
+            resolved != DEFAULT_BASE_URL
+            or parsed.scheme != "https"
+            or parsed.hostname != "markovo.net"
+            or parsed.port is not None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RemoteClientError(
+                "The public Markovo client connects only to https://markovo.net.",
+                status=400,
+                payload={
+                    "error": {
+                        "code": "unsafe_api_origin",
+                        "message": "The public Markovo client connects only to https://markovo.net.",
+                    }
+                },
+            )
+    return resolved
+
+
+def _request_url(base_url: str, path: str) -> str:
+    resolved_base_url = _normalize_base_url(base_url)
+    parsed_path = urllib.parse.urlsplit(path)
+    if (
+        not path.startswith("/")
+        or path.startswith("//")
+        or parsed_path.scheme
+        or parsed_path.netloc
+        or parsed_path.fragment
+    ):
+        raise RemoteClientError(
+            "Refused an unsafe Markovo API request path.",
+            status=400,
+            payload={
+                "error": {
+                    "code": "unsafe_api_path",
+                    "message": "Refused an unsafe Markovo API request path.",
+                }
+            },
+        )
+    return f"{resolved_base_url}{path}"
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _open_url(request: urllib.request.Request, *, timeout: float):
+    if PUBLIC_DISTRIBUTION:
+        return urllib.request.build_opener(_NoRedirectHandler).open(
+            request, timeout=timeout
+        )
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 def remote_capability_for_path(path: str | Path) -> tuple[str, str]:
     suffix = Path(path).suffix.lower()
     resolved = _REMOTE_CAPABILITY_BY_SUFFIX.get(suffix)
@@ -130,12 +197,12 @@ class RemoteClient:
         api_key: str | None = None,
         timeout_seconds: float = 30.0,
     ) -> RemoteClient:
-        resolved_base_url = (
+        resolved_base_url = _normalize_base_url(
             base_url
             or os.getenv("MARKOVO_BASE_URL")
             or os.getenv("PDF2MD_BASE_URL")
             or DEFAULT_BASE_URL
-        ).rstrip("/")
+        )
         resolved_api_key = (
             api_key or os.getenv("MARKOVO_API_KEY") or os.getenv("PDF2MD_API_KEY")
         )
@@ -167,12 +234,12 @@ class RemoteClient:
         timeout_seconds: float = 30.0,
     ) -> RemoteClient:
         """Create a client for the public capability catalog without weakening protected APIs."""
-        resolved_base_url = (
+        resolved_base_url = _normalize_base_url(
             base_url
             or os.getenv("MARKOVO_BASE_URL")
             or os.getenv("PDF2MD_BASE_URL")
             or DEFAULT_BASE_URL
-        ).rstrip("/")
+        )
         resolved_api_key = (
             api_key or os.getenv("MARKOVO_API_KEY") or os.getenv("PDF2MD_API_KEY") or ""
         )
@@ -651,15 +718,13 @@ class RemoteClient:
         if self.api_key:
             request_headers["authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(
-            f"{self.base_url}{path}",
+            _request_url(self.base_url, path),
             data=body,
             method=method,
             headers=request_headers,
         )
         try:
-            with urllib.request.urlopen(
-                request, timeout=self.timeout_seconds
-            ) as response:
+            with _open_url(request, timeout=self.timeout_seconds) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             raw = error.read()

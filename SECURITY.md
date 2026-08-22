@@ -13,3 +13,9 @@ channel before sharing technical details.
 API keys should only be stored in environment variables or an MCP client's
 secret store. If a key is exposed, revoke or rotate it immediately in the
 [Developer portal](https://markovo.net/app#developer).
+
+The public client accepts authenticated API traffic only to
+`https://markovo.net` and refuses redirects for those requests. MCP tool
+schemas do not accept API keys or service-origin overrides. MCP file tools also
+require an explicit `MARKOVO_MCP_ROOT` and reject paths or symlinks that escape
+that dedicated directory.
