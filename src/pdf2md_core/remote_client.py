@@ -98,7 +98,13 @@ class RemoteClientError(RuntimeError):
     def to_dict(self) -> dict[str, Any]:
         error = self.payload.get("error")
         if isinstance(error, dict):
-            return {"status": self.status, **error}
+            public_error = {"status": self.status, **error}
+            if PUBLIC_DISTRIBUTION and public_error.get("code") == "quota_exceeded":
+                public_error.setdefault("action", "open_checkout")
+                public_error.setdefault(
+                    "portal_url", f"{DEFAULT_BASE_URL}/app#billing"
+                )
+            return public_error
         return {"status": self.status, "code": "remote_error", "message": str(self)}
 
 
