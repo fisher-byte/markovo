@@ -45,6 +45,29 @@ topped up before retrying.
 
 ## MCP configuration
 
+### Remote MCP (recommended for hosted agents)
+
+Connect the Streamable HTTP endpoint:
+
+```text
+https://markovo.net/mcp
+```
+
+The MCP host discovers Markovo's OAuth 2.1 metadata, opens the Markovo
+account sign-in and consent screen, and stores its own scoped token. You
+do not create, paste, or share an API key for this remote connection.
+Remote tools can inspect capabilities, Credits, and owned jobs; convert
+one explicitly supplied public HTTPS page with a required
+`max_credit_units` ceiling; and create or revoke short-lived result-image
+links. Remote MCP cannot read local files. Use the stdio package below or
+REST multipart upload when a local file must be converted.
+
+Markovo never tops up Credits or changes a plan automatically. A low
+balance response points to https://markovo.net/app#billing and waits for
+the account owner to act.
+
+### Local stdio MCP
+
 ```json
 {
   "mcpServers": {
@@ -83,6 +106,7 @@ to Billing when Credits are insufficient.
 - [Markovo home](https://markovo.net)
 - [PDF to Markdown](https://markovo.net/pdf-to-markdown)
 - [Documentation](https://markovo.net/docs)
+- [Remote MCP guide](https://markovo.net/docs/mcp)
 - [Pricing and Credits](https://markovo.net/pricing)
 - [Developer portal and API keys](https://markovo.net/app#developer)
 - [Billing and top-up](https://markovo.net/app#billing)

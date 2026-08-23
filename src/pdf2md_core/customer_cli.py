@@ -15,7 +15,7 @@ from .remote_client import (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="markovo")
-    parser.add_argument("--version", action="version", version="markovo 0.1.0")
+    parser.add_argument("--version", action="version", version="markovo 0.1.1")
     commands = parser.add_subparsers(dest="command", required=True)
 
     convert = commands.add_parser("convert", help="Convert a file through the Markovo product API.")

@@ -7,13 +7,19 @@
     "url": "https://github.com/fisher-byte/markovo",
     "source": "github"
   },
-  "version": "0.1.0",
-  "websiteUrl": "https://markovo.net/docs",
+  "version": "0.1.1",
+  "websiteUrl": "https://markovo.net/docs/mcp",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://markovo.net/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "markovo",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "runtimeHint": "uvx",
       "packageArguments": [
         {
