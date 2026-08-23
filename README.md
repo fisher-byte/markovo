@@ -14,14 +14,14 @@ account-metered service at `https://markovo.net`.
 ## Install
 
 ```bash
-pip install markovo
+pip install "markovo==0.1.1"
 ```
 
 Or run it without a permanent installation:
 
 ```bash
-uvx markovo --help
-uvx --from markovo markovo-mcp
+uvx --from "markovo==0.1.1" markovo --help
+uvx --from "markovo==0.1.1" markovo-mcp
 ```
 
 ## API key and Credits
@@ -73,7 +73,7 @@ the account owner to act.
   "mcpServers": {
     "markovo": {
       "command": "uvx",
-      "args": ["--from", "markovo", "markovo-mcp"],
+      "args": ["--from", "markovo==0.1.1", "markovo-mcp"],
       "env": {
         "MARKOVO_API_KEY": "${MARKOVO_API_KEY}",
         "MARKOVO_MCP_ROOT": "/path/to/safe/project"
