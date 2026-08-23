@@ -59,7 +59,7 @@ jobs:
               "?search=io.github.fisher-byte%2Fmarkovo"
           )
           expected_name = "io.github.fisher-byte/markovo"
-          expected_version = "0.1.0"
+          expected_version = "0.1.1"
           for attempt in range(12):
               try:
                   with urllib.request.urlopen(url, timeout=15) as response:

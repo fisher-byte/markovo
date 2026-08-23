@@ -15,7 +15,7 @@ from .remote_client import (
     remote_product_diagnostics,
 )
 
-SERVER_INFO = {"name": "markovo", "version": "0.1.0"}
+SERVER_INFO = {"name": "markovo", "version": "0.1.1"}
 PROTOCOL_VERSION = "2024-11-05"
 
 
