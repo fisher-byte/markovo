@@ -111,6 +111,10 @@ to Billing when Credits are insufficient.
 - [Developer portal and API keys](https://markovo.net/app#developer)
 - [Billing and top-up](https://markovo.net/app#billing)
 
+## Found a conversion issue?
+
+Report a reproducible case to [support@markovo.net](mailto:support@markovo.net). If we confirm and fix it, you'll receive 1 month of Markovo Pro.
+
 ## Security
 
 Report security issues privately using the instructions in
