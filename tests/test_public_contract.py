@@ -41,6 +41,16 @@ class PublicDistributionContractTests(unittest.TestCase):
         for marker in forbidden:
             self.assertNotIn(marker, corpus)
 
+    def test_export_formats_and_registry_package_version_match(self) -> None:
+        import pdf2md_core
+        metadata = json.loads((ROOT / "server.json").read_text())
+        self.assertEqual(metadata["packages"][0]["version"], pdf2md_core.__version__)
+        self.assertEqual(customer_mcp.SERVER_INFO["version"], pdf2md_core.__version__)
+        response = handle_request({"jsonrpc":"2.0", "id":10, "method":"tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        for name in ["markovo_convert", "markovo_convert_url"]:
+            self.assertEqual(set(tools[name]["inputSchema"]["properties"]["download_format"]["enum"]), {"zip", "md", "docx", "txt"})
+
     def test_mcp_lists_customer_tools(self) -> None:
         response = handle_request(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
