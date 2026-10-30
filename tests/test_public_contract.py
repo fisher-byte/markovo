@@ -51,6 +51,14 @@ class PublicDistributionContractTests(unittest.TestCase):
         for name in ["markovo_convert", "markovo_convert_url"]:
             self.assertEqual(set(tools[name]["inputSchema"]["properties"]["download_format"]["enum"]), {"zip", "md", "docx", "txt"})
 
+    def test_publisher_lock_contains_exact_declared_build_backend(self) -> None:
+        import re
+        declaration = (ROOT / "pyproject.toml").read_text()
+        requires = json.loads(re.search(r"requires\s*=\s*(\[[^\]]+\])", declaration).group(1))
+        locked = {line.split()[0] for line in (ROOT / ".github/build-requirements.txt").read_text().splitlines() if "==" in line}
+        for requirement in requires:
+            self.assertIn(requirement, locked, "The no-isolation publisher must install the declared build backend")
+
     def test_mcp_lists_customer_tools(self) -> None:
         response = handle_request(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
