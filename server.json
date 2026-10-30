@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.fisher-byte/markovo",
-  "title": "Markovo File to Markdown",
-  "description": "Convert files and authorized public HTTPS pages to Markdown with secure job and billing guidance.",
+  "title": "Markovo File to Text, Word and Markdown",
+  "description": "Convert files and authorized public HTTPS pages to text, editable Word or Markdown with secure job and billing guidance.",
   "repository": {
     "url": "https://github.com/fisher-byte/markovo",
     "source": "github"
