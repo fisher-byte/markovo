@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .bundle_manifest import verify_bundle_manifest
+from .client_defaults import DEFAULT_CLIENT_MAX_CREDITS, resolve_client_max_credits
 from .remote_client import (
     DEFAULT_POLL_ATTEMPTS,
     REMOTE_FILE_CAPABILITY_IDS,
@@ -15,7 +16,7 @@ from .remote_client import (
     remote_product_diagnostics,
 )
 
-SERVER_INFO = {"name": "markovo", "version": "0.1.1"}
+SERVER_INFO = {"name": "markovo", "version": "0.1.2"}
 PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -71,7 +72,9 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             input_path = _required_input_path(arguments, "input_path")
             out_dir = _required_output_dir(arguments, "out_dir")
             options: dict[str, Any] = {
-                "max_credits": _required(arguments, "max_credits"),
+                "max_credits": resolve_client_max_credits(
+                    arguments.get("max_credits", DEFAULT_CLIENT_MAX_CREDITS)
+                ),
                 "mode": str(arguments.get("mode", "fast")),
                 "layout_fidelity": str(arguments.get("layout_fidelity", "standard")),
                 "poll_interval_seconds": float(
@@ -96,7 +99,9 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 _client().convert_url(
                     str(_required(arguments, "url")),
                     _required_output_dir(arguments, "out_dir"),
-                    max_credits=_required(arguments, "max_credits"),
+                    max_credits=resolve_client_max_credits(
+                        arguments.get("max_credits", DEFAULT_CLIENT_MAX_CREDITS)
+                    ),
                     accept_remote_fetch=True,
                     poll_interval_seconds=float(
                         arguments.get("poll_interval_seconds", 1.8)
@@ -241,6 +246,11 @@ def _tools() -> list[dict[str, Any]]:
                         "type": "number",
                         "minimum": 0.001,
                         "multipleOf": 0.001,
+                        "default": DEFAULT_CLIENT_MAX_CREDITS,
+                        "description": (
+                            f"Convenience safety ceiling; defaults to {DEFAULT_CLIENT_MAX_CREDITS} Credits. "
+                            "Set an explicit bound for deliberate automation."
+                        ),
                     },
                     "mode": {
                         "type": "string",
@@ -252,8 +262,8 @@ def _tools() -> list[dict[str, Any]]:
                         "enum": ["standard", "formula"],
                         "default": "standard",
                         "description": (
-                            "Opt-in formula-region Beta for PDFs. Detected equations are returned "
-                            "as LaTeX and must be reviewed against the original."
+                            "Compatibility-only formula flag for PDFs; normalized to the "
+                            "standard pipeline. The formula-region Beta is retired."
                         ),
                     },
                     "capability_id": {
@@ -262,11 +272,11 @@ def _tools() -> list[dict[str, Any]]:
                     },
                     "download_format": {
                         "type": "string",
-                        "enum": ["zip", "md"],
+                        "enum": ["zip", "md", "docx", "txt"],
                         "default": "zip",
                     },
                 },
-                "required": ["input_path", "out_dir", "max_credits"],
+                "required": ["input_path", "out_dir"],
             },
         },
         {
@@ -284,6 +294,11 @@ def _tools() -> list[dict[str, Any]]:
                         "type": "number",
                         "minimum": 0.001,
                         "multipleOf": 0.001,
+                        "default": DEFAULT_CLIENT_MAX_CREDITS,
+                        "description": (
+                            f"Convenience safety ceiling; defaults to {DEFAULT_CLIENT_MAX_CREDITS} Credits. "
+                            "Set an explicit bound for deliberate automation."
+                        ),
                     },
                     "accept_remote_fetch": {"type": "boolean", "const": True},
                     "poll_interval_seconds": {"type": "number", "default": 1.8},
@@ -293,11 +308,11 @@ def _tools() -> list[dict[str, Any]]:
                     },
                     "download_format": {
                         "type": "string",
-                        "enum": ["zip", "md"],
+                        "enum": ["zip", "md", "docx", "txt"],
                         "default": "zip",
                     },
                 },
-                "required": ["url", "out_dir", "max_credits", "accept_remote_fetch"],
+                "required": ["url", "out_dir", "accept_remote_fetch"],
             },
         },
         *[

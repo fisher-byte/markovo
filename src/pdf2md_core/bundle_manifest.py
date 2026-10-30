@@ -75,6 +75,8 @@ def build_bundle_manifest(
     for item in sorted(bundle.rglob("*")):
         if not item.is_file() or item.name in {BUNDLE_MANIFEST_NAME, BUNDLE_ARCHIVE_NAME}:
             continue
+        if any(part.startswith(".") for part in item.relative_to(bundle).parts):
+            continue
         files.append(
             {
                 "path": item.relative_to(bundle).as_posix(),
@@ -297,7 +299,12 @@ def _verify_directory(bundle: Path) -> dict[str, Any]:
         actual={
             item.relative_to(bundle).as_posix()
             for item in bundle.rglob("*")
-            if item.is_file() and item.name not in {BUNDLE_MANIFEST_NAME, BUNDLE_ARCHIVE_NAME}
+            if item.is_file()
+            and item.name not in {BUNDLE_MANIFEST_NAME, BUNDLE_ARCHIVE_NAME}
+            and not any(
+                part.startswith(".")
+                for part in item.relative_to(bundle).parts
+            )
         },
         errors=errors,
     )

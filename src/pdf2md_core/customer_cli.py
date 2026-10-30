@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .bundle_manifest import verify_bundle_manifest
+from .client_defaults import DEFAULT_CLIENT_MAX_CREDITS
 from .remote_client import (
     DEFAULT_POLL_ATTEMPTS,
     RemoteClient,
@@ -27,15 +28,31 @@ def main(argv: list[str] | None = None) -> int:
         choices=["standard", "formula"],
         default="standard",
         help=(
-            "Use the opt-in PDF formula-region Beta. Detected equations are returned "
-            "as LaTeX and must be reviewed against the original."
+            "Accepted for compatibility only: PDF conversions are normalized to the "
+            "standard pipeline. The formula-region Beta is retired."
         ),
     )
-    convert.add_argument("--max-credits", required=True)
+    convert.add_argument(
+        "--max-credits",
+        default=DEFAULT_CLIENT_MAX_CREDITS,
+        help=(
+            f"Maximum settlement ceiling. Defaults to {DEFAULT_CLIENT_MAX_CREDITS} Credits "
+            "for convenience; set an explicit bound for deliberate automation."
+        ),
+    )
     convert.add_argument("--poll-interval-seconds", type=float, default=1.8)
     convert.add_argument("--poll-attempts", type=int, default=DEFAULT_POLL_ATTEMPTS)
-    convert.add_argument("--download-format", choices=["zip", "md"], default="zip")
+    convert.add_argument("--download-format", choices=["zip", "md", "docx", "txt"], default="zip")
     convert.add_argument("--capability-id")
+    convert.add_argument(
+        "--pages",
+        metavar="RANGES",
+        help=(
+            "PDF only: 1-based page ranges like '1-3,5,8-' (an open end runs "
+            "to the last page). Only the selected pages convert and count "
+            "toward the estimate."
+        ),
+    )
 
     url_convert = commands.add_parser(
         "url-convert",
@@ -43,10 +60,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     url_convert.add_argument("url")
     url_convert.add_argument("--out", type=Path, required=True)
-    url_convert.add_argument("--max-credits", required=True)
+    url_convert.add_argument(
+        "--max-credits",
+        default=DEFAULT_CLIENT_MAX_CREDITS,
+        help=(
+            f"Maximum settlement ceiling. Defaults to {DEFAULT_CLIENT_MAX_CREDITS} Credits "
+            "for convenience; set an explicit bound for deliberate automation."
+        ),
+    )
     url_convert.add_argument("--poll-interval-seconds", type=float, default=1.8)
     url_convert.add_argument("--poll-attempts", type=int, default=DEFAULT_POLL_ATTEMPTS)
-    url_convert.add_argument("--download-format", choices=["zip", "md"], default="zip")
+    url_convert.add_argument("--download-format", choices=["zip", "md", "docx", "txt"], default="zip")
     url_convert.add_argument(
         "--accept-remote-fetch",
         action="store_true",
@@ -99,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.capability_id:
                 options["capability_id"] = args.capability_id
+            if args.pages:
+                options["pages"] = args.pages
             payload = RemoteClient.from_env().convert_file(args.input, args.out, **options)
         elif args.command == "url-convert":
             payload = RemoteClient.from_env().convert_url(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import shutil
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .bundle_manifest import verify_bundle_manifest
-from .credit_v2 import format_credits, parse_credit_units
+from .credit_amounts import format_credits, parse_credit_units
 
 DEFAULT_BASE_URL = "https://markovo.net"
 # The public export flips this to True. Internal release canaries keep explicit
@@ -23,6 +24,17 @@ PUBLIC_DISTRIBUTION = True
 DEFAULT_POLL_ATTEMPTS = 400
 IDEMPOTENT_READ_ATTEMPTS = 3
 IDEMPOTENT_READ_BACKOFF_SECONDS = 0.5
+# Result downloads resume from the bytes already received instead of
+# restarting the whole GET when the stream is cut mid-download.
+DOWNLOAD_RESUME_ATTEMPTS = 3
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
+INLINE_UPLOAD_BYTES = 8 * 1024 * 1024
+
+
+def _export_fields(download_format: str) -> dict[str, str]:
+    if download_format not in {"zip", "md", "docx", "txt"}:
+        raise ValueError("download_format must be zip, md, docx, or txt.")
+    return {"output_format": download_format} if download_format in {"docx", "txt"} else {}
 
 _REMOTE_CAPABILITY_BY_SUFFIX = {
     ".pdf": ("pdf-to-markdown", "application/pdf"),
@@ -31,6 +43,10 @@ _REMOTE_CAPABILITY_BY_SUFFIX = {
     ".markdown": ("text-to-markdown", "text/markdown"),
     ".json": ("text-to-markdown", "application/json"),
     ".xml": ("text-to-markdown", "application/xml"),
+    ".rtf": ("text-to-markdown", "application/rtf"),
+    ".ipynb": ("text-to-markdown", "application/x-ipynb+json"),
+    ".eml": ("text-to-markdown", "message/rfc822"),
+    ".msg": ("text-to-markdown", "application/vnd.ms-outlook"),
     ".html": ("html-to-markdown", "text/html"),
     ".htm": ("html-to-markdown", "text/html"),
     ".xhtml": ("html-to-markdown", "application/xhtml+xml"),
@@ -46,6 +62,11 @@ _REMOTE_CAPABILITY_BY_SUFFIX = {
     ".xlsx": (
         "xlsx-to-markdown",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+    ".xls": ("spreadsheet-to-markdown", "application/vnd.ms-excel"),
+    ".ods": (
+        "spreadsheet-to-markdown",
+        "application/vnd.oasis.opendocument.spreadsheet",
     ),
     ".epub": ("epub-to-markdown", "application/epub+zip"),
     ".zip": ("notion-to-markdown", "application/zip"),
@@ -172,6 +193,29 @@ def _open_url(request: urllib.request.Request, *, timeout: float):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
+def _download_expected_total(response) -> int | None:
+    """Total object size from Content-Range (206) or Content-Length (200)."""
+    content_range = response.headers.get("content-range") or ""
+    unit, _, spec = content_range.partition(" ")
+    bounds, _, total = spec.partition("/")
+    if unit == "bytes" and total.isdigit():
+        return int(total)
+    content_length = response.headers.get("content-length") or ""
+    if content_length.isdigit():
+        return int(content_length)
+    return None
+
+
+def _download_content_range_start(response) -> int | None:
+    content_range = response.headers.get("content-range") or ""
+    unit, _, spec = content_range.partition(" ")
+    bounds, _, _total = spec.partition("/")
+    start, _, _end = bounds.partition("-")
+    if unit == "bytes" and start.isdigit():
+        return int(start)
+    return None
+
+
 def remote_capability_for_path(path: str | Path) -> tuple[str, str]:
     suffix = Path(path).suffix.lower()
     resolved = _REMOTE_CAPABILITY_BY_SUFFIX.get(suffix)
@@ -186,7 +230,7 @@ def _validate_layout_fidelity(layout_fidelity: str, capability_id: str) -> None:
     if layout_fidelity not in {"standard", "formula"}:
         raise ValueError("layout_fidelity must be standard or formula.")
     if layout_fidelity == "formula" and capability_id != "pdf-to-markdown":
-        raise ValueError("Formula enhancement Beta accepts PDF files only.")
+        raise ValueError("layout_fidelity=formula is a PDF-only compatibility option.")
 
 
 @dataclass(slots=True)
@@ -266,6 +310,7 @@ class RemoteClient:
         poll_attempts: int = DEFAULT_POLL_ATTEMPTS,
         download_format: str = "zip",
         layout_fidelity: str = "standard",
+        pages: str | None = None,
     ) -> dict[str, Any]:
         return self.convert_file(
             input_path,
@@ -277,6 +322,7 @@ class RemoteClient:
             download_format=download_format,
             capability_id="pdf-to-markdown",
             layout_fidelity=layout_fidelity,
+            pages=pages,
         )
 
     def convert_file(
@@ -291,7 +337,9 @@ class RemoteClient:
         download_format: str = "zip",
         capability_id: str | None = None,
         layout_fidelity: str = "standard",
+        pages: str | None = None,
     ) -> dict[str, Any]:
+        export_fields = _export_fields(download_format)
         input_path = Path(input_path)
         out_dir = Path(out_dir)
         estimate = self.create_estimate(
@@ -299,6 +347,8 @@ class RemoteClient:
             mode=mode,
             capability_id=capability_id,
             layout_fidelity=layout_fidelity,
+            pages=pages,
+            **export_fields,
         )
         return self._complete_estimate(
             estimate,
@@ -320,9 +370,11 @@ class RemoteClient:
         poll_attempts: int = DEFAULT_POLL_ATTEMPTS,
         download_format: str = "zip",
     ) -> dict[str, Any]:
+        export_fields = _export_fields(download_format)
         estimate = self.create_url_estimate(
             url,
             accept_remote_fetch=accept_remote_fetch,
+            **export_fields,
         )
         return self._complete_estimate(
             estimate,
@@ -338,15 +390,19 @@ class RemoteClient:
         url: str,
         *,
         accept_remote_fetch: bool,
+        output_format: str | None = None,
     ) -> dict[str, Any]:
         if accept_remote_fetch is not True:
             raise ValueError("URL conversion requires explicit remote-fetch consent.")
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url is required.")
+        if output_format is not None and output_format not in {"md", "docx", "txt"}:
+            raise ValueError("output_format must be md, docx, or txt.")
         payload = json.dumps(
             {
                 "url": url.strip(),
                 "accept_remote_fetch": True,
+                **({"output_format": output_format} if output_format is not None else {}),
             },
             separators=(",", ":"),
         ).encode("utf-8")
@@ -419,6 +475,8 @@ class RemoteClient:
         mode: str = "fast",
         capability_id: str | None = None,
         layout_fidelity: str = "standard",
+        pages: str | None = None,
+        output_format: str | None = None,
     ) -> dict[str, Any]:
         """Upload once and receive the stable upload id used for retry-safe confirmation.
 
@@ -431,17 +489,29 @@ class RemoteClient:
                 f"Capability mismatch: {capability_id} does not accept {path.suffix.lower()}."
             )
         _validate_layout_fidelity(layout_fidelity, inferred_capability)
-        body, content_type = encode_multipart(
-            {
-                "mode": mode,
-                "capability_id": capability_id or inferred_capability,
-                "layout_fidelity": layout_fidelity,
-            },
-            [("file", path.name, path.read_bytes(), declared_mime)],
-        )
+        if output_format is not None and output_format not in {"md", "docx", "txt"}:
+            raise ValueError("output_format must be md, docx, or txt.")
+        fields = {
+            "mode": mode,
+            "capability_id": capability_id or inferred_capability,
+            "layout_fidelity": layout_fidelity,
+            **({"output_format": output_format} if output_format is not None else {}),
+        }
+        if pages is not None:
+            if inferred_capability != "pdf-to-markdown":
+                raise ValueError("pages is a pdf-to-markdown option only.")
+            fields["pages"] = pages
+        estimate_client = self
+        if path.stat().st_size > INLINE_UPLOAD_BYTES:
+            fields["upload_session_id"] = self._stage_upload(path, inferred_capability, declared_mime)
+            files = []
+            estimate_client = RemoteClient(self.base_url, self.api_key, max(self.timeout_seconds, 300))
+        else:
+            files = [("file", path.name, path.read_bytes(), declared_mime)]
+        body, content_type = encode_multipart(fields, files)
         for attempt in range(3):
             try:
-                return self._request_json(
+                return estimate_client._request_json(
                     "POST",
                     "/v1/estimates",
                     body=body,
@@ -452,6 +522,50 @@ class RemoteClient:
                     raise
                 time.sleep(0.5 * (attempt + 1))
         raise RuntimeError("estimate retry loop exhausted")  # pragma: no cover
+
+    def _stage_upload(self, path: Path, capability_id: str, content_type: str) -> str:
+        """Use the existing R2 part protocol without buffering a large source."""
+        before = path.stat()
+        session = self._request_json("POST", "/v1/uploads", body=json.dumps({
+            "filename": path.name, "size": before.st_size,
+            "capability_id": capability_id, "content_type": content_type,
+        }).encode(), headers={"content-type": "application/json"})
+        session_id = session.get("upload_session_id")
+        part_size, part_count = session.get("part_size"), session.get("part_count")
+        if (not isinstance(session_id, str) or not session_id.startswith("ups_")
+                or len(session_id) != 36 or any(c not in "0123456789abcdef" for c in session_id[4:])
+                or type(part_size) is not int or not 0 < part_size <= 32 * 1024 * 1024
+                or type(part_count) is not int or part_count != (before.st_size + part_size - 1) // part_size):
+            raise RemoteClientError("Markovo returned an invalid upload session.")
+        # A 32MiB part can take longer than the ordinary API timeout on a slow
+        # uplink. This allowance applies only to the byte transfer, before billing.
+        transfer = RemoteClient(self.base_url, self.api_key, max(self.timeout_seconds, 300))
+        try:
+            with path.open("rb") as stream:
+                for number in range(1, part_count + 1):
+                    expected = min(part_size, before.st_size - (number - 1) * part_size)
+                    chunk = stream.read(expected)
+                    if len(chunk) != expected:
+                        raise ValueError("The source file changed during upload. Retry with a stable file.")
+                    for attempt in range(3):
+                        try:
+                            transfer._request_json("PUT", f"/v1/uploads/{session_id}/parts/{number}",
+                                body=chunk, headers={"content-type": "application/octet-stream"})
+                            break
+                        except RemoteClientError as error:
+                            if attempt == 2 or error.status not in {408, 429, 500, 502, 503, 504}:
+                                raise
+                            time.sleep(0.5 * (attempt + 1))
+            after = path.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError("The source file changed during upload. Retry with a stable file.")
+            return session_id
+        except Exception:
+            try:
+                self._request_json("DELETE", f"/v1/uploads/{session_id}")
+            except Exception:
+                pass  # Server-side expiry remains the fallback cleanup.
+            raise
 
     def confirm_estimate(
         self,
@@ -545,20 +659,47 @@ class RemoteClient:
             status = job.get("status")
             if status == "succeeded":
                 return job
-            if status == "failed":
-                message = str(job.get("error") or "Remote conversion failed.")
-                code = str(job.get("last_error_code") or "conversion_failed")
+            if status in {"failed", "cancelled", "timed_out"}:
+                cancelled = status == "cancelled"
+                timed_out = status == "timed_out"
+                message = (
+                    "Conversion was cancelled. Credits were not charged."
+                    if cancelled
+                    else (
+                        "Conversion timed out. Reserved Credits were released."
+                        if timed_out
+                        else str(job.get("error") or "Remote conversion failed.")
+                    )
+                )
+                code = (
+                    "conversion_cancelled"
+                    if cancelled
+                    else (
+                        "conversion_timeout"
+                        if timed_out
+                        else str(
+                            job.get("error_code")
+                            or "conversion_failed"
+                        )
+                    )
+                )
                 error_payload: dict[str, Any] = {
                     "code": code,
                     "message": message,
                     "job_id": str(job.get("id") or job_id),
                 }
+                if cancelled or timed_out:
+                    error_payload["retryable"] = False
                 # This is already a public billing field on the job response.
-                # Preserve it for trusted automation that must prove a failed
-                # synthetic request incurred no customer charge; it is not an
-                # internal route, Provider, or diagnostic detail.
+                # Preserve only the canonical zero value so trusted automation
+                # can prove a terminal failure incurred no customer charge;
+                # it is not an internal route, Provider, or diagnostic detail.
                 actual_credit_units = job.get("actual_credit_units")
-                if isinstance(actual_credit_units, int) and actual_credit_units >= 0:
+                if (
+                    isinstance(actual_credit_units, int)
+                    and not isinstance(actual_credit_units, bool)
+                    and actual_credit_units == 0
+                ):
                     error_payload["actual_credit_units"] = actual_credit_units
                 raise RemoteClientError(
                     message,
@@ -567,7 +708,15 @@ class RemoteClient:
             if attempt < poll_attempts - 1:
                 time.sleep(poll_interval_seconds)
         raise RemoteClientError(
-            "Remote conversion timed out while polling job status.", payload=current
+            "Job status polling ended before the conversion reached a terminal state.",
+            payload={
+                "error": {
+                    "code": "job_poll_exhausted",
+                    "message": "Job status polling ended before the conversion reached a terminal state.",
+                    "job_id": job_id,
+                    "retryable": True,
+                }
+            },
         )
 
     def get_job(self, job_id: str) -> dict[str, Any]:
@@ -576,15 +725,14 @@ class RemoteClient:
     def download_job(
         self, job_id: str, out_dir: str | Path, *, format: str = "zip"
     ) -> Path:
-        if format not in {"zip", "md"}:
-            raise ValueError("format must be `zip` or `md`.")
+        _export_fields(format)
         out_dir = Path(out_dir)
-        data = self._request_idempotent_bytes(
+        data = self._download_bytes(
             f"/v1/jobs/{urllib.parse.quote(job_id)}/download?format={format}"
         )
         out_dir.mkdir(parents=True, exist_ok=True)
-        if format == "md":
-            target = out_dir / "output.md"
+        if format != "zip":
+            target = out_dir / f"output.{format}"
             target.write_bytes(data)
             return target
         archive = out_dir / "bundle.zip"
@@ -688,17 +836,115 @@ class RemoteClient:
             "idempotent JSON read retry loop exhausted"
         )  # pragma: no cover
 
-    def _request_idempotent_bytes(self, path: str) -> bytes:
-        for attempt in range(IDEMPOTENT_READ_ATTEMPTS):
+    def _download_bytes(self, path: str) -> bytes:
+        """Stream a result download, resuming with Range/If-Range after a cut.
+
+        Retries carry `Range: bytes=<received>-` and `If-Range: <etag>` so a
+        mid-stream IncompleteRead or timeout continues where it stopped. A
+        server that answers a resume with 200 (stale validator) means the
+        object changed, so the buffered bytes are discarded and the download
+        restarts from the fresh body — bounded by the same attempt budget.
+        """
+        received = bytearray()
+        etag: str | None = None
+        attempts = 0
+        while True:
+            headers: dict[str, str] = {
+                "accept": "application/json,text/plain,*/*",
+                "user-agent": "markovo-cli/0.1 (+https://markovo.net)",
+            }
+            if self.api_key:
+                headers["authorization"] = f"Bearer {self.api_key}"
+            if received and etag:
+                headers["range"] = f"bytes={len(received)}-"
+                headers["if-range"] = etag
+            request = urllib.request.Request(
+                _request_url(self.base_url, path),
+                method="GET",
+                headers=headers,
+            )
             try:
-                return self._request_bytes("GET", path)
-            except RemoteClientError as error:
-                if not self._should_retry_idempotent_read(error, attempt):
-                    raise
-                time.sleep(IDEMPOTENT_READ_BACKOFF_SECONDS * (attempt + 1))
-        raise RuntimeError(
-            "idempotent byte read retry loop exhausted"
-        )  # pragma: no cover
+                with _open_url(request, timeout=self.timeout_seconds) as response:
+                    status = response.getcode() or 200
+                    response_etag = response.headers.get("etag")
+                    if response_etag:
+                        etag = response_etag
+                    if status == 200:
+                        # The resume validator did not hold: the stored bytes
+                        # are stale, restart from the fresh full body.
+                        received.clear()
+                    expected = _download_expected_total(response)
+                    if status == 206:
+                        start = _download_content_range_start(response)
+                        if start is None or start != len(received):
+                            # A misaligned partial cannot be appended safely;
+                            # restart from scratch on the next attempt.
+                            received.clear()
+                            attempts += 1
+                            if attempts > DOWNLOAD_RESUME_ATTEMPTS:
+                                raise RemoteClientError(
+                                    "The download was interrupted repeatedly. Please try again.",
+                                    status=503,
+                                    payload={
+                                        "error": {
+                                            "code": "download_interrupted",
+                                            "message": "The download was interrupted repeatedly. Please try again.",
+                                            "retryable": True,
+                                        }
+                                    },
+                                )
+                            continue
+                    try:
+                        while True:
+                            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                            if not chunk:
+                                break
+                            received.extend(chunk)
+                    except http.client.IncompleteRead as cut:
+                        partial = cut.partial or b""
+                        received.extend(
+                            partial if isinstance(partial, bytes) else bytes(partial)
+                        )
+                    if expected is None or len(received) >= expected:
+                        return bytes(received)
+                    # Truncated body that ended without an exception.
+            except urllib.error.HTTPError as error:
+                raw = error.read()
+                payload = parse_json_object(raw)
+                message = (
+                    error_message(payload)
+                    or error.reason
+                    or f"Remote API request failed with status {error.code}."
+                )
+                raise RemoteClientError(
+                    message, status=error.code, payload=payload
+                ) from error
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                http.client.HTTPException,
+            ) as error:
+                partial = getattr(error, "partial", b"") or b""
+                received.extend(
+                    partial if isinstance(partial, bytes) else bytes(partial)
+                )
+            attempts += 1
+            if attempts > DOWNLOAD_RESUME_ATTEMPTS:
+                raise RemoteClientError(
+                    "The download was interrupted repeatedly. Please try again.",
+                    status=503,
+                    payload={
+                        "error": {
+                            "code": "download_interrupted",
+                            "message": "The download was interrupted repeatedly. Please try again.",
+                            "retryable": True,
+                        }
+                    },
+                )
+            # With nothing retained there is no resume position; the bounded
+            # loop then simply restarts the GET like a normal read retry.
+            time.sleep(IDEMPOTENT_READ_BACKOFF_SECONDS * attempts)
 
     @staticmethod
     def _should_retry_idempotent_read(error: RemoteClientError, attempt: int) -> bool:
@@ -743,7 +989,7 @@ class RemoteClient:
             raise RemoteClientError(
                 message, status=error.code, payload=payload
             ) from error
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
             raise RemoteClientError(
                 "Could not reach the Markovo service. Please try again.",
                 status=503,

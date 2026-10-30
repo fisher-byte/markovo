@@ -1,7 +1,7 @@
 # Markovo CLI and MCP server
 
 [Markovo](https://markovo.net) turns supported files and explicitly
-authorized public HTTPS pages into clean, structured Markdown. For the
+authorized public HTTPS pages into readable text, editable Word, or structured Markdown. For the
 dedicated web experience and product details, visit the
 [PDF to Markdown Converter](https://markovo.net/pdf-to-markdown).
 
@@ -14,15 +14,28 @@ account-metered service at `https://markovo.net`.
 ## Install
 
 ```bash
-pip install "markovo==0.1.1"
+pip install "markovo==0.1.2"
 ```
 
 Or run it without a permanent installation:
 
 ```bash
-uvx --from "markovo==0.1.1" markovo --help
-uvx --from "markovo==0.1.1" markovo-mcp
+uvx --from "markovo==0.1.2" markovo --help
+uvx --from "markovo==0.1.2" markovo-mcp
 ```
+
+## Output formats
+
+CLI 0.1.2+ accepts `--download-format md`, `docx`, or `txt` on file
+and URL conversions; the existing default is a verified Markdown ZIP
+bundle. Local stdio MCP uses the `download_format` argument. Hosted
+Remote MCP uses `output_format`. All formats reuse the same account
+and one conversion; downloading another format does not charge again.
+Files above 8MiB use bounded R2 upload parts instead of one full-file
+memory buffer. Image/document/audio limits are 25MiB on Free and
+50MiB on Starter or Pro. Video limits are 200MiB/1h, 700MiB/2h and
+2GiB/2h. Upgrade advice is returned only when a higher plan can accept
+the input; otherwise compress or split the file before retrying.
 
 ## API key and Credits
 
@@ -37,9 +50,11 @@ export MARKOVO_API_KEY="your-key"
 markovo doctor --json
 ```
 
-Every conversion requires an explicit Credit ceiling. When a key is
-missing, the client points to the Developer portal. When Credits are
-insufficient, the service response points to the
+CLI and local stdio MCP use a 15-Credit convenience safety ceiling
+when their Credit limit is omitted. REST and direct client calls still
+require an explicit Credit ceiling. When a key is missing, the client
+points to the Developer portal. When Credits are insufficient, the
+service response points to the
 [billing page](https://markovo.net/app#billing) so the account can be
 topped up before retrying.
 
@@ -73,7 +88,7 @@ the account owner to act.
   "mcpServers": {
     "markovo": {
       "command": "uvx",
-      "args": ["--from", "markovo==0.1.1", "markovo-mcp"],
+      "args": ["--from", "markovo==0.1.2", "markovo-mcp"],
       "env": {
         "MARKOVO_API_KEY": "${MARKOVO_API_KEY}",
         "MARKOVO_MCP_ROOT": "/path/to/safe/project"
@@ -110,10 +125,6 @@ to Billing when Credits are insufficient.
 - [Pricing and Credits](https://markovo.net/pricing)
 - [Developer portal and API keys](https://markovo.net/app#developer)
 - [Billing and top-up](https://markovo.net/app#billing)
-
-## Found a conversion issue?
-
-Report a reproducible case to [support@markovo.net](mailto:support@markovo.net). If we confirm and fix it, you'll receive 1 month of Markovo Pro.
 
 ## Security
 
