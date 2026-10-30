@@ -44,6 +44,7 @@ class PublicDistributionContractTests(unittest.TestCase):
     def test_export_formats_and_registry_package_version_match(self) -> None:
         import pdf2md_core
         metadata = json.loads((ROOT / "server.json").read_text())
+        self.assertLessEqual(len(metadata["description"]), 100, "Official MCP Registry descriptions must fit its 100-character contract")
         self.assertEqual(metadata["packages"][0]["version"], pdf2md_core.__version__)
         self.assertEqual(customer_mcp.SERVER_INFO["version"], pdf2md_core.__version__)
         response = handle_request({"jsonrpc":"2.0", "id":10, "method":"tools/list"})
